@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  load-balancer:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/root/config
+    depends_on:
+      - backend1
+      - backend2
+
+  backend1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    environment:
+      - PORT=9001
+
+  backend2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    environment:
+      - PORT=9002

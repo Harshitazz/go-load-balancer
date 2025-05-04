@@ -1,0 +1,15 @@
+# Stage 1: Build
+FROM golang:1.21-alpine as builder
+
+WORKDIR /app
+COPY . .
+RUN go build -o load-balancer main.go
+
+# Stage 2: Run
+FROM alpine:latest
+WORKDIR /root/
+COPY --from=builder /app/load-balancer .
+COPY config/backends.json ./config/
+
+EXPOSE 8080
+CMD ["./load-balancer"]

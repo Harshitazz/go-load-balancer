@@ -1,0 +1,7 @@
+{
+    "backends": [
+      "http://backend1:9001",
+      "http://backend2:9002"
+    ]
+  }
+  
