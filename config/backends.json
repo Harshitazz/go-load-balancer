@@ -1,7 +1,10 @@
-{
-    "backends": [
-      "http://backend1:9001",
-      "http://backend2:9002"
-    ]
+[
+  {
+    "url": "http://backend2:9002",
+    "weight": 3
+  },
+  {
+    "url": "http://backend3:9003",
+    "weight": 1
   }
-  
+]

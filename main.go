@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"time"
 )
@@ -13,6 +15,12 @@ type Backend struct {
 	URL          *url.URL
 	Alive        bool
 	ReverseProxy *httputil.ReverseProxy
+	Weight       int
+}
+
+type BackendConfig struct {
+	URL    string `json:"url"`
+	Weight int    `json:"weight"`
 }
 
 type LoadBalancer struct {
@@ -20,20 +28,39 @@ type LoadBalancer struct {
 	curr     uint64
 }
 
-// Create a new backend instance
-func newBackend(rawurl string) *Backend {
-	parsedURL, err := url.Parse(rawurl)
+// Load backends from JSON config
+func loadBackends(path string) []*Backend {
+	file, err := os.Open(path)
 	if err != nil {
-		log.Fatalf("Failed to parse URL %s: %v", rawurl, err)
+		log.Fatalf("Failed to open config: %v", err)
 	}
-	return &Backend{
-		URL:          parsedURL,
-		Alive:        true,
-		ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
+	defer file.Close()
+
+	var backendConfigs []BackendConfig
+	if err := json.NewDecoder(file).Decode(&backendConfigs); err != nil {
+		log.Fatalf("Failed to parse config: %v", err)
 	}
+
+	var backends []*Backend
+	for _, cfg := range backendConfigs {
+		parsedURL, err := url.Parse(cfg.URL)
+		if err != nil {
+			log.Printf("Invalid backend URL %s: %v", cfg.URL, err)
+			continue
+		}
+		for i := 0; i < cfg.Weight; i++ {
+			backends = append(backends, &Backend{
+				URL:          parsedURL,
+				Alive:        true,
+				Weight:       cfg.Weight,
+				ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
+			})
+		}
+	}
+	return backends
 }
 
-// Get the next alive backend in round-robin
+// Select next alive backend (weighted round-robin)
 func (lb *LoadBalancer) getNextBackend() *Backend {
 	total := uint64(len(lb.backends))
 	for i := uint64(0); i < total; i++ {
@@ -45,22 +72,21 @@ func (lb *LoadBalancer) getNextBackend() *Backend {
 	return nil
 }
 
-// Serve incoming requests to available backend
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	backend := lb.getNextBackend()
 	if backend != nil {
 		backend.ReverseProxy.ServeHTTP(w, r)
 	} else {
-		http.Error(w, "Service unavailable: no healthy backends", http.StatusServiceUnavailable)
+		http.Error(w, "No healthy backends available", http.StatusServiceUnavailable)
 	}
 }
 
-// Ping backends to check their health
+// Periodically check backend health
 func healthCheck(lb *LoadBalancer) {
 	for {
 		for _, backend := range lb.backends {
 			resp, err := http.Get(backend.URL.String())
-			if err != nil || resp.StatusCode != 200 {
+			if err != nil || resp.StatusCode != http.StatusOK {
 				log.Printf("❌ %s marked as dead", backend.URL)
 				backend.Alive = false
 			} else {
@@ -76,17 +102,16 @@ func healthCheck(lb *LoadBalancer) {
 }
 
 func main() {
-	lb := &LoadBalancer{
-		backends: []*Backend{
-			newBackend("http://localhost:9001"),
-			newBackend("http://localhost:9002"),
-		},
+	backends := loadBackends("config/backends.json")
+	if len(backends) == 0 {
+		log.Fatal("No valid backends loaded")
 	}
 
+	lb := &LoadBalancer{backends: backends}
 	go healthCheck(lb)
 
 	log.Println("🔃 Load balancer started on :8080")
 	if err := http.ListenAndServe(":8080", lb); err != nil {
-		log.Fatalf("Failed to start load balancer: %v", err)
+		log.Fatalf("Load balancer failed: %v", err)
 	}
 }
